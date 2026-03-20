@@ -1,16 +1,36 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { recordApiCall } from './apiUsage.js';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(API_KEY);
 
-const BLUEPRINT_SUMMARY = `
-85% Pharmaceutical Care (Pharmacotherapy, PK/PD, DDI, ADRs, Special Populations, Herbal)
-15% Supporting Knowledge (MedChem, Toxicology, Law, Administrative Pharmacy)
-30 Clinical Situations: TB, HIV, UTI, RTI, Cellulitis, HTN, Diabetes, Dyslipidemia, Parkinson,
-Asthma, COPD, Allergic Rhinitis, GERD, PUD, Cirrhosis, Epilepsy, Depression, Gout, CKD,
-Hypokalemia, Paracetamol Toxicity, Warfarin INR, Pregnancy/Lactation, Herbal, FEFO inventory,
-Pharmacy Law, Chemotherapy Nausea, Glaucoma, Ethics.
-`;
+// Full topic pool — randomly sampled each call to force question variety
+const ALL_TOPICS = [
+  "Tuberculosis (TB) pharmacotherapy", "HIV/AIDS antiretroviral therapy",
+  "Urinary Tract Infection (UTI) treatment", "Community-acquired pneumonia",
+  "Skin and soft tissue infections", "Hypertension drug selection",
+  "Type 2 Diabetes: insulin & oral agents", "Dyslipidemia & statin therapy",
+  "Parkinson's disease medications", "Asthma inhalers & stepwise therapy",
+  "COPD exacerbation management", "Allergic Rhinitis: antihistamines",
+  "GERD: PPIs & H2 blockers", "Peptic Ulcer Disease (H. pylori eradication)",
+  "Liver cirrhosis & hepatic encephalopathy", "Epilepsy: AED selection",
+  "Depression: SSRI/SNRI vs TCA", "Gout: urate-lowering therapy",
+  "Chronic Kidney Disease (CKD) dose adjustment", "Hypokalemia correction",
+  "Paracetamol toxicity & NAC protocol", "Warfarin INR management",
+  "Drug use in pregnancy & lactation", "Herbal medicine interactions",
+  "Chemotherapy-induced nausea: antiemetics", "Glaucoma eye drop therapy",
+  "Sepsis antibiotic choice", "Schizophrenia: antipsychotics",
+  "Heart failure: ACEi, ARB, beta-blocker", "Pharmacy law & ethics",
+  "Renal replacement therapy dosing", "Drug-drug interaction management",
+  "Oral contraceptives & interactions", "Hypothyroidism: levothyroxine",
+  "Osteoporosis: bisphosphonates", "Anticoagulation: DOAC vs warfarin",
+];
+
+// Pick a random subset of topics to include in each prompt
+const randomTopics = (n = 6) => {
+  const shuffled = [...ALL_TOPICS].sort(() => 0.5 - Math.random());
+  return shuffled.slice(0, n).join(", ");
+};
 
 const getModel = () => genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
@@ -20,7 +40,6 @@ export const geminiService = {
 
   /**
    * Generates N independent clinical cases in parallel.
-   * Returns a flat array of questions, each tagged with their caseTitle and caseText.
    */
   async generateMultipleCases(numCases) {
     if (!hasKey()) throw new Error("Missing Gemini API Key.");
@@ -43,33 +62,38 @@ export const geminiService = {
   },
 
   /**
-   * Generates regular MCQ questions based on the blueprint.
+   * Generates regular MCQ questions — random topics injected for variety.
    */
   async generateQuestions(count = 5) {
     if (!hasKey()) throw new Error("Missing Gemini API Key.");
 
     const model = getModel();
+    const topics = randomTopics(Math.min(count, 8));
+    const seed = Date.now(); // force cache-busting
+
     const prompt = `
-      You are a Senior Thai Pharmacy Professor conducting PLEPC1 board exam questions.
-      Generate ${count} hard, high-difficulty clinical pharmacy MCQ questions IN THAI.
+      [Session: ${seed}]
+      You are a Senior Thai Pharmacy Professor. Generate ${count} UNIQUE, high-difficulty clinical pharmacy MCQ questions IN THAI.
+      
+      MANDATORY TOPICS FOR THIS SESSION (must cover these areas): ${topics}
       
       RULES:
-      1. Follow 85:15 Blueprint ratio.
-      2. Situations to use: ${BLUEPRINT_SUMMARY}
-      3. Output a STRICT JSON ARRAY only. No markdown.
-      4. Each item MUST have these exact keys:
+      1. Each question must test a DIFFERENT clinical topic — no repetition.
+      2. Output STRICT JSON ARRAY only. No markdown, no extra text.
+      3. Each object MUST have:
          - "id": number
          - "type": "mcq"
-         - "question": string (clinical case scenario in Thai)
+         - "question": string (clinical scenario in Thai, minimum 2 sentences)
          - "options": array of exactly 5 strings
-         - "answer": number (0-based index of correct option)
-         - "explanation": string (brief Thai rationale, 30-50 words)
+         - "answer": number (0-based index)
+         - "explanation": string (Thai rationale, 30-50 words)
          - "category": string (e.g., "โรคติดเชื้อ")
          - "situation": string (e.g., "CKD Dose Adjustment")
     `;
 
     try {
       const result = await model.generateContent(prompt);
+      recordApiCall(1);
       let text = result.response.text().replace(/```json/g, "").replace(/```/g, "").trim();
       return JSON.parse(text);
     } catch (error) {
@@ -86,11 +110,17 @@ export const geminiService = {
     if (!hasKey()) throw new Error("Missing Gemini API Key.");
 
     const model = getModel();
+    const topic = randomTopics(1); // pick ONE random disease area for this case
+    const seed = Date.now();
+
     const prompt = `
+      [Session: ${seed}]
       You are a Senior Thai Clinical Pharmacist writing PLEPC1 hard case-based questions.
       
+      REQUIRED DISEASE AREA FOR THIS CASE: ${topic}
+      
       Generate ONE complex clinical case scenario and EXACTLY 4 linked MCQ questions about it.
-      The case should be a real-world pharmacy challenge (Drug interactions, ADRs, dosing in special populations, or clinical decision making).
+      The case MUST be set in the disease area above. Use realistic Thai patient demographics and clinical data.
       All content must be IN THAI.
       
       Output a STRICT JSON object with NO markdown:
@@ -112,13 +142,14 @@ export const geminiService = {
       
       RULES:
       - Case must involve at least 2 drugs.
-      - Each question must test a different aspect: one for drug selection, one for dosing/dose adjustment, one for interactions/ADR, one for monitoring/counseling.
+      - Each question tests a different aspect: drug selection, dose adjustment, DDI/ADR, monitoring.
       - Difficulty: BOARD EXAM HARD.
       - Options must be pharmacologically realistic.
     `;
 
     try {
       const result = await model.generateContent(prompt);
+      recordApiCall(1);
       let text = result.response.text().replace(/```json/g, "").replace(/```/g, "").trim();
       return JSON.parse(text);
     } catch (error) {

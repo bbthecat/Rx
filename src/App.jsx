@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { quizData } from './data/quizData';
 import {
@@ -6,6 +7,47 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { geminiService } from './services/geminiService';
+import { getUsage, getDailyPercent, getUsageColor, DAILY_LIMIT } from './services/apiUsage.js';
+
+// ─── API Usage Bar ────────────────────────────────────────────────────────────
+
+const ApiUsageBar = () => {
+  const [usage, setUsage] = useState(() => getUsage());
+
+  useEffect(() => {
+    const tick = () => setUsage(getUsage());
+    tick();
+    const id = setInterval(tick, 10_000); // refresh every 10s
+    return () => clearInterval(id);
+  }, []);
+
+  const pct = Math.min(100, Math.round((usage.count / DAILY_LIMIT) * 100));
+  const col = getUsageColor(pct);
+
+  return (
+    <div
+      style={{ background: col.bg, borderColor: col.border }}
+      className="flex items-center gap-3 rounded-2xl border px-4 py-2 text-xs"
+    >
+      <div className="flex flex-col gap-1 flex-1 min-w-0">
+        <div className="flex justify-between items-center">
+          <span style={{ color: col.text }} className="font-black uppercase tracking-widest text-[10px]">
+            Gemini API Usage วันนี้
+          </span>
+          <span style={{ color: col.text }} className="font-black">
+            {usage.count} / {DAILY_LIMIT} req &nbsp;·&nbsp; {pct}%
+          </span>
+        </div>
+        <div className="w-full h-2 rounded-full bg-white/60" style={{ border: `1px solid ${col.border}` }}>
+          <div
+            className="h-full rounded-full transition-all duration-500"
+            style={{ width: `${pct}%`, background: col.bar }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ─── Overlay ─────────────────────────────────────────────────────────────────
 
@@ -88,11 +130,13 @@ const App = () => {
   const [score, setScore] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [realRationale, setRealRationale] = useState(null);
+  const [isUsingFallback, setIsUsingFallback] = useState(false);
 
   // ── Start quiz ──────────────────────────────────────────────────────────────
 
   const startQuiz = async () => {
     setIsGenerating(true);
+    setIsUsingFallback(false);
     setRealRationale(null);
     setCurrentIdx(0);
     setScore(0);
@@ -126,7 +170,9 @@ const App = () => {
 
       setStep('quiz');
     } catch (err) {
+      const isQuota = err.message?.includes('429') || err.message?.includes('quota') || err.message?.includes('Quota');
       console.log('Falling back to local data:', err.message);
+      setIsUsingFallback(true);
       setTimeout(() => {
         const shuffled = [...quizData].sort(() => 0.5 - Math.random());
         setQuestions(shuffled.slice(0, numQuestions).map(q => ({ ...q, type: 'mcq' })));
@@ -210,13 +256,16 @@ const App = () => {
         {isGenerating && <GeneratingOverlay key="loader" mode={quizMode} />}
       </AnimatePresence>
 
-      <div className="header-pill">
-        <div className="bg-teal-600 p-2 rounded-xl text-white shadow-lg">
+      <div className="header-pill" style={{ gap: '1rem', alignItems: 'center' }}>
+        <div className="bg-teal-600 p-2 rounded-xl text-white shadow-lg shrink-0">
           <Stethoscope size={20} />
         </div>
-        <div>
+        <div className="shrink-0">
           <h1 className="text-sm font-black text-slate-800 leading-tight">Pharmacy Mentor</h1>
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">PLEPC1 Specialist</p>
+        </div>
+        <div className="flex-1 min-w-0">
+          <ApiUsageBar />
         </div>
       </div>
 
@@ -236,7 +285,7 @@ const App = () => {
                 </div>
                 <h2 className="text-4xl font-black mb-3 text-slate-800 tracking-tight">Prepare for PLEPC1</h2>
                 <p className="text-slate-400 text-sm leading-relaxed">
-                  ระบบสร้างข้อสอบ AI แบบ Real-time ตามเกณฑ์มาตรฐาน 85:15<br/>
+                  ระบบสร้างข้อสอบ AI แบบ Real-time ตามเกณฑ์มาตรฐาน 85:15<br />
                   รองรับข้อสอบแบบ Case-Based Reasoning ระดับ Board Exam
                 </p>
               </div>
@@ -249,9 +298,8 @@ const App = () => {
                     <button
                       key={m.id}
                       onClick={() => setQuizMode(m.id)}
-                      className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-2 text-center transition-all ${
-                        quizMode === m.id ? 'border-teal-400 bg-teal-50/60 shadow-sm' : 'border-slate-100 bg-white hover:border-slate-200'
-                      }`}
+                      className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-2 text-center transition-all ${quizMode === m.id ? 'border-teal-400 bg-teal-50/60 shadow-sm' : 'border-slate-100 bg-white hover:border-slate-200'
+                        }`}
                     >
                       {m.icon}
                       <div>
@@ -349,6 +397,18 @@ const App = () => {
                   </button>
                 </form>
               </div>
+
+              {/* Fallback notice */}
+              {isUsingFallback && (
+                <div className="flex items-center gap-2 mb-3 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
+                  <span className="text-amber-500 text-base">⚠️</span>
+                  <div className="flex-1">
+                    <span className="text-xs font-black text-amber-700">ใช้ข้อสอบ Local Bank</span>
+                    <p className="text-[10px] text-amber-600 mt-0.5">Gemini API quota เกิน — AI จะกลับมาทำงานหลัง quota reset (ประมาณ 1 นาที–24 ชม.)</p>
+                  </div>
+                  <a href="https://aistudio.google.com" target="_blank" rel="noreferrer" className="text-[10px] font-black text-amber-600 underline whitespace-nowrap">ดู quota</a>
+                </div>
+              )}
 
               <div className="premium-progress mb-4">
                 <div className="premium-progress-fill" style={{ width: `${((currentIdx + 1) / questions.length) * 100}%` }} />
@@ -460,8 +520,8 @@ const App = () => {
                   {score / questions.length >= 0.8
                     ? `ยอดเยี่ยมครับ! คะแนน ${score}/${questions.length} บ่งชี้ว่าคุณพร้อมสูงในระดับ Board Exam`
                     : score / questions.length >= 0.6
-                    ? `ความพร้อม ${Math.round((score / questions.length) * 100)}% แนะนำทบทวนส่วนที่งดเว้น`
-                    : `ยังต้องพัฒนาอีกครับ ทบทวน Blueprint 85:15 ให้ละเอียด`
+                      ? `ความพร้อม ${Math.round((score / questions.length) * 100)}% แนะนำทบทวนส่วนที่งดเว้น`
+                      : `ยังต้องพัฒนาอีกครับ ทบทวน Blueprint 85:15 ให้ละเอียด`
                   }
                 </p>
               </div>
