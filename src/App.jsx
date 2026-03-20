@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { geminiService } from './services/geminiService';
-import { getUsage, getDailyPercent, getUsageColor, DAILY_LIMIT } from './services/apiUsage.js';
+import { getUsage, getUsageColor, DAILY_LIMIT } from './services/apiUsage.js';
+import { pickUnseen, markSeen, unseenCount, resetSeenIds } from './services/seenTracker.js';
 
 // ─── API Usage Bar ────────────────────────────────────────────────────────────
 
@@ -98,23 +99,34 @@ const Typewriter = ({ text, delay = 12 }) => {
 
 // ─── Case Banner ──────────────────────────────────────────────────────────────
 
-const CaseBanner = ({ title, caseText, questionIndex, caseIndex, totalCases }) => (
-  <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-3xl mb-4">
-    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
-      <div className="flex items-center gap-2 mb-3">
-        <div className="w-7 h-7 rounded-lg bg-amber-400 flex items-center justify-center">
-          <FlaskConical size={14} className="text-white" />
+const CaseBanner = ({ title, caseText, questionIndex, caseIndex, totalCases, globalQuestionStart }) => {
+  const qStart = globalQuestionStart + 1;
+  const qEnd = globalQuestionStart + 4;
+  return (
+    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-3xl mb-4">
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-7 h-7 rounded-lg bg-amber-400 flex items-center justify-center shrink-0">
+            <FlaskConical size={14} className="text-white" />
+          </div>
+          <div>
+            <div className="text-xs font-black text-amber-700 tracking-wide">
+              สถานการณ์ที่ {caseIndex + 1}
+              {totalCases > 1 && <span className="text-amber-500"> ({caseIndex + 1}/{totalCases})</span>}
+              {' '}
+              <span className="font-bold text-amber-600">(ข้อ {qStart}–{qEnd})</span>
+            </div>
+            <div className="text-[11px] font-bold text-amber-600">{title}</div>
+          </div>
+          <span className="ml-auto text-[10px] font-bold text-amber-500 bg-amber-100 px-2 py-1 rounded-full">
+            ข้อที่ {questionIndex + 1} / 4
+          </span>
         </div>
-        <span className="text-xs font-black text-amber-700 uppercase tracking-widest">
-          Clinical Case {totalCases > 1 ? `${caseIndex + 1}/${totalCases}` : ''}
-        </span>
-        <span className="ml-auto text-xs font-bold text-amber-500">ข้อที่ {questionIndex + 1} / 4 ในเคสนี้</span>
+        <p className="text-xs text-amber-800 leading-relaxed">{caseText}</p>
       </div>
-      <h3 className="text-sm font-black text-amber-900 mb-2">{title}</h3>
-      <p className="text-xs text-amber-800 leading-relaxed">{caseText}</p>
-    </div>
-  </motion.div>
-);
+    </motion.div>
+  );
+};
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
@@ -170,12 +182,12 @@ const App = () => {
 
       setStep('quiz');
     } catch (err) {
-      const isQuota = err.message?.includes('429') || err.message?.includes('quota') || err.message?.includes('Quota');
       console.log('Falling back to local data:', err.message);
       setIsUsingFallback(true);
       setTimeout(() => {
-        const shuffled = [...quizData].sort(() => 0.5 - Math.random());
-        setQuestions(shuffled.slice(0, numQuestions).map(q => ({ ...q, type: 'mcq' })));
+        // Use pickUnseen so we never repeat questions the user has already seen
+        const picked = pickUnseen(quizData, numQuestions).map(q => ({ ...q, type: 'mcq' }));
+        setQuestions(picked);
         setStep('quiz');
         setIsGenerating(false);
       }, 2500);
@@ -193,6 +205,8 @@ const App = () => {
     setSelected(i);
     setAnswered(true);
     if (i === currentQ.answer) setScore(s => s + 1);
+    // Mark this question as seen so it won't repeat in future sessions
+    markSeen([currentQ.id]);
     try {
       const r = await geminiService.generateRationale(currentQ.question, currentQ.options, currentQ.answer);
       if (r) setRealRationale(r);
@@ -416,12 +430,13 @@ const App = () => {
 
               {/* Case banner */}
               {isCase && caseTitle && caseText && (
-                <CaseBanner title={caseTitle} caseText={caseText} questionIndex={caseQIndex} caseIndex={caseIndex} totalCases={totalCases} />
+                <CaseBanner title={caseTitle} caseText={caseText} questionIndex={caseQIndex} caseIndex={caseIndex} totalCases={totalCases} globalQuestionStart={currentIdx - caseQIndex} />
               )}
 
               {/* Question Card */}
               <div className={`glass-card ${isCase ? 'border-l-4 border-amber-300' : ''}`}>
                 <h3 className="text-xl font-bold mb-8 text-slate-800 leading-snug">
+                  <span className="text-teal-700 mr-2">ข้อ {currentIdx + 1}:</span>
                   {currentQ.question}
                 </h3>
 

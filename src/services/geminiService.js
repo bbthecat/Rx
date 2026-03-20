@@ -1,8 +1,28 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { recordApiCall } from './apiUsage.js';
 
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const genAI = new GoogleGenerativeAI(API_KEY);
+// ── Multi-key rotation ────────────────────────────────────────────────────────
+// Add more keys in .env as VITE_GEMINI_API_KEY_2, _3, _4, _5 for more quota
+const API_KEYS = [
+  import.meta.env.VITE_GEMINI_API_KEY,
+  import.meta.env.VITE_GEMINI_API_KEY_2,
+  import.meta.env.VITE_GEMINI_API_KEY_3,
+  import.meta.env.VITE_GEMINI_API_KEY_4,
+  import.meta.env.VITE_GEMINI_API_KEY_5,
+].filter(k => k && k !== 'YOUR_KEY_HERE');
+
+let keyIndex = 0;
+
+const getModel = () => {
+  const key = API_KEYS[keyIndex % API_KEYS.length];
+  return new GoogleGenerativeAI(key).getGenerativeModel({ model: "gemini-2.0-flash" });
+};
+
+// Rotate to next key (called when 429 is hit)
+const rotateKey = () => { keyIndex = (keyIndex + 1) % Math.max(1, API_KEYS.length); };
+
+const hasKey = () => API_KEYS.length > 0;
+
 
 // Full topic pool — randomly sampled each call to force question variety
 const ALL_TOPICS = [
@@ -32,9 +52,7 @@ const randomTopics = (n = 6) => {
   return shuffled.slice(0, n).join(", ");
 };
 
-const getModel = () => genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-const hasKey = () => API_KEY && API_KEY !== 'YOUR_KEY_HERE';
 
 export const geminiService = {
 
